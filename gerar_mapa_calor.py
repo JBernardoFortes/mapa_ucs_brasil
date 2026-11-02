@@ -47,25 +47,22 @@ body{background:#ffffff}
 .titulo{position:fixed;top:14px;left:20px;z-index:999;font-family:Georgia,serif;color:#222}
 .titulo b{font-size:32px}
 .titulo span{display:block;font-family:sans-serif;font-size:17px;color:#555}
-.legenda{position:fixed;right:20px;bottom:20px;z-index:999;background:#fff;padding:16px 20px;
-  border-radius:10px;font-family:sans-serif;font-size:18px;color:#222;box-shadow:0 0 0 1px #ddd}
-.legenda h4{margin:0 0 8px;font-size:22px}
-.linha{margin:10px 0}
-.linha i{display:inline-block;width:24px;height:20px;margin-right:8px;vertical-align:middle;box-shadow:inset 0 0 0 1px #bbb}
-.legenda small{display:block;margin-top:10px;font-size:15px;color:#555}
-.rotulo{font:bold 20px sans-serif;color:#222;text-shadow:0 0 4px #fff,0 0 4px #fff;white-space:nowrap;text-align:center}
-.pct{font:15px sans-serif;font-weight:normal;color:#222}
+.legenda{position:fixed;right:clamp(8px,1.25vw,20px);bottom:clamp(8px,1.25vw,20px);z-index:999;background:#fff;
+  padding:.9em 1.1em;border-radius:10px;font-family:sans-serif;font-size:clamp(13px,1.15vw,18px);color:#222;
+  box-shadow:0 0 0 1px #ddd;box-sizing:border-box;max-width:calc(100vw - 16px);max-height:60vh;overflow-y:auto}
+.legenda h4{margin:0 0 .4em;font-size:1.25em}
+.linha{margin:.5em 0}
+.linha i{display:inline-block;width:1.3em;height:1.1em;margin-right:.4em;vertical-align:middle;box-shadow:inset 0 0 0 1px #bbb}
+.legenda small{display:block;margin-top:.5em;font-size:.8em;color:#555}
+.rotulo{font:bold clamp(9px,1.25vw,20px) sans-serif;color:#222;background:rgba(255,255,255,.93);border-radius:8px;
+  padding:.3em .55em;box-shadow:0 2px 8px rgba(0,0,0,.25);width:max-content;max-width:clamp(120px,20vw,240px);
+  white-space:normal;overflow-wrap:anywhere}
+.pct{font:clamp(8px,.95vw,15px) sans-serif;font-weight:normal;color:#222;white-space:normal;overflow-wrap:anywhere}
 @media (max-width: 768px){
 .titulo{top:8px;left:10px;right:10px}
 .titulo b{font-size:20px}
 .titulo span{font-size:13px}
-.legenda{left:8px;right:8px;bottom:8px;padding:10px 12px;font-size:14px;max-height:45vh;overflow-y:auto}
-.legenda h4{font-size:17px}
-.linha{margin:6px 0}
-.linha i{width:18px;height:14px}
-.legenda small{font-size:12px}
-.rotulo{font-size:13px}
-.pct{font-size:12px}
+.legenda{left:8px;right:8px;bottom:8px;max-width:none;max-height:45vh}
 }
 </style>"""
 
