@@ -54,6 +54,19 @@ body{background:#ffffff}
 .linha i{display:inline-block;width:24px;height:20px;margin-right:8px;vertical-align:middle;box-shadow:inset 0 0 0 1px #bbb}
 .legenda small{display:block;margin-top:10px;font-size:15px;color:#555}
 .rotulo{font:bold 20px sans-serif;color:#222;text-shadow:0 0 4px #fff,0 0 4px #fff;white-space:nowrap;text-align:center}
+.pct{font:15px sans-serif;font-weight:normal;color:#222}
+@media (max-width: 768px){
+.titulo{top:8px;left:10px;right:10px}
+.titulo b{font-size:20px}
+.titulo span{font-size:13px}
+.legenda{left:8px;right:8px;bottom:8px;padding:10px 12px;font-size:14px;max-height:45vh;overflow-y:auto}
+.legenda h4{font-size:17px}
+.linha{margin:6px 0}
+.linha i{width:18px;height:14px}
+.legenda small{font-size:12px}
+.rotulo{font-size:13px}
+.pct{font-size:12px}
+}
 </style>"""
 
 
@@ -94,6 +107,18 @@ def carregar_dados():
     return contagem, totalPorTipo, faltando
 
 
+def rotulo_percentuais(por_tipo):
+    total = sum(por_tipo.values())
+    return "".join(f"<div class='pct'>{TIPOS[t][0]}: {por_tipo[t] / total * 100:.1f}%</div>".replace(".", ",")
+                   for t in TIPOS if por_tipo[t])
+
+
+def detalhe_percentual(por_tipo):
+    total = sum(por_tipo.values())
+    return " · ".join(f"{TIPOS[t][0]}: {por_tipo[t]} ({por_tipo[t] / total * 100:.1f}%)".replace(".", ",")
+                      for t in TIPOS if por_tipo[t])
+
+
 def mistura(hex_base, t):
     canais = [int(hex_base[i:i + 2], 16) for i in (1, 3, 5)]
     return "#" + "".join(f"{round(255 + (c - 255) * t):02x}" for c in canais)
@@ -132,7 +157,7 @@ def gerar_features(contagem):
         propriedades = {
             "regiao": regiao,
             "total": total,
-            "detalhe": " · ".join(f"{TIPOS[t][0]}: {por_tipo[t]}" for t in TIPOS if por_tipo[t]),
+            "detalhe": detalhe_percentual(por_tipo),
         }
         t = 0.4 + 0.6 * total / maximo
         pesos = [(tipo, por_tipo[tipo]) for tipo in TIPOS if por_tipo[tipo]]
@@ -164,17 +189,21 @@ def gerar_mapa(features, centros, contagem, totalPorTipo):
         tooltip=folium.GeoJsonTooltip(fields=["regiao", "total", "detalhe"],
                                       aliases=["Região:", "UCs:", "Por tipo:"]),
     ).add_to(mapa)
-
     for regiao, ponto in centros.items():
         folium.Marker(
             location=[ponto.y, ponto.x],
-            icon=folium.DivIcon(html=f"<div class='rotulo'>{regiao}<br>{sum(contagem[regiao].values())} UCs</div>"),
+            icon=folium.DivIcon(html=f"<div class='rotulo'>{regiao}<br>{sum(contagem[regiao].values())} UCs"
+                                f"{rotulo_percentuais(contagem[regiao])}</div>"),
         ).add_to(mapa)
 
     mapa_js = mapa.get_name()
     mapa.get_root().script.add_child(folium.Element(
-        f"window.addEventListener('load', () => {{ {mapa_js}.invalidateSize(); "
-        f"{mapa_js}.fitBounds([[-33.8, -74.0], [5.3, -34.8]], {{paddingTopLeft: [40, 120], paddingBottomRight: [440, 40]}}); }});"
+        f"function ajustar() {{ const titulo = document.querySelector('.titulo'); "
+        f"const legenda = document.querySelector('.legenda'); const mobile = window.innerWidth <= 768; "
+        f"{mapa_js}.invalidateSize(); {mapa_js}.fitBounds([[-33.8, -74.0], [5.3, -34.8]], {{"
+        f"paddingTopLeft: [mobile ? 10 : 40, titulo.offsetHeight + 20], "
+        f"paddingBottomRight: mobile ? [10, legenda.offsetHeight + 10] : [legenda.offsetWidth + 40, 40]}}); }}"
+        "window.addEventListener('load', ajustar); window.addEventListener('resize', ajustar);"
     ))
     mapa.get_root().header.add_child(folium.Element(CSS))
     mapa.get_root().html.add_child(folium.Element(
