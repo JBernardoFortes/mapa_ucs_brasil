@@ -16,6 +16,7 @@ BASE = Path(__file__).parent
 UCS = BASE / "ucs_federais_protecao_integral.csv"
 MUNICIPIOS = BASE / "municipios_ibge.csv"
 MALHA_UFS = BASE / "malha_ufs_ibge.geojson"
+MALHA_MUNICIPIOS = BASE / "malha_municipios_ibge.geojson"
 PASTA_MAPAS = BASE / "mapas"
 
 CODIGO_UF = {11: "RO", 12: "AC", 13: "AM", 14: "RR", 15: "PA", 16: "AP", 17: "TO",
@@ -39,6 +40,12 @@ TIPOS = {
     "REVIS": ("Refúgio de Vida Silvestre", "#d6372c"),
     "MONA": ("Monumento Natural", "#7a3fa0"),
 }
+INTENSIDADE = {1: 0.45, 2: 0.65, 3: 0.82, 4: 1.0}
+POSICAO_ROTULOS = {"Norte": ("esquerda", 4.5), "Centro-Oeste": ("esquerda", -14), "Sul": ("esquerda", -30),
+                   "Nordeste": ("direita", -4), "Sudeste": ("direita", -20)}
+LON_ESQUERDA = -74.0
+LON_DIREITA = -33.0
+MARGEM_REGIOES = 0.15
 NAVEGADORES = ["chromium", "chromium-browser", "google-chrome", "google-chrome-stable"]
 
 CSS = """<style>
@@ -58,6 +65,7 @@ body{background:#ffffff}
   padding:.3em .55em;box-shadow:0 2px 8px rgba(0,0,0,.25);width:max-content;max-width:clamp(120px,20vw,240px);
   white-space:normal;overflow-wrap:anywhere}
 .pct{font:clamp(8px,.95vw,15px) sans-serif;font-weight:normal;color:#222;white-space:normal;overflow-wrap:anywhere}
+.esq{transform:translateX(-100%)}
 @media (max-width: 768px){
 .titulo{top:8px;left:10px;right:10px}
 .titulo b{font-size:20px}
@@ -83,6 +91,7 @@ def carregar_dados():
             porNome[norm(r["nome"])].append(r["codigo_ibge"])
 
     contagem = defaultdict(Counter)
+    contagemMunicipio = defaultdict(Counter)
     totalPorTipo = Counter()
     faltando = []
     with UCS.open(encoding="utf-8-sig") as f:
@@ -97,23 +106,20 @@ def carregar_dados():
                     codigo = porNome[chave][0]
                 if codigo:
                     regioes.add(REGIAO_POR_UF[int(codigo[:2])])
+                    contagemMunicipio[codigo][r["categoria"]] += 1
                 else:
                     faltando.append(f"{r['nome']} -> {m} ({r['uf']})")
             for regiao in regioes:
                 contagem[regiao][r["categoria"]] += 1
-    return contagem, totalPorTipo, faltando
+    return contagem, contagemMunicipio, totalPorTipo, faltando
 
 
-def rotulo_percentuais(por_tipo):
-    total = sum(por_tipo.values())
-    return "".join(f"<div class='pct'>{TIPOS[t][0]}: {por_tipo[t] / total * 100:.1f}%</div>".replace(".", ",")
-                   for t in TIPOS if por_tipo[t])
+def rotulo_quantidades(por_tipo):
+    return "".join(f"<div class='pct'>{TIPOS[t][0]}: {por_tipo[t]}</div>" for t in TIPOS if por_tipo[t])
 
 
-def detalhe_percentual(por_tipo):
-    total = sum(por_tipo.values())
-    return " · ".join(f"{TIPOS[t][0]}: {por_tipo[t]} ({por_tipo[t] / total * 100:.1f}%)".replace(".", ",")
-                      for t in TIPOS if por_tipo[t])
+def detalhe_quantidades(por_tipo):
+    return " · ".join(f"{TIPOS[t][0]}: {por_tipo[t]}" for t in TIPOS if por_tipo[t])
 
 
 def mistura(hex_base, t):
@@ -136,68 +142,89 @@ def fatiar(geom, pesos):
     return partes
 
 
-def gerar_features(contagem):
+def uniao_regioes():
     ufs = json.loads(MALHA_UFS.read_text(encoding="utf-8"))["features"]
     geoms_por_regiao = defaultdict(list)
     for feature in ufs:
         uf = int(feature["properties"]["codarea"])
         geoms_por_regiao[REGIAO_POR_UF[uf]].append(shape(feature["geometry"]))
+    return {regiao: unary_union(geoms) for regiao, geoms in geoms_por_regiao.items()}
 
+
+def features_regioes(uniao, contagem):
     maximo = max(sum(c.values()) for c in contagem.values())
     features = []
-    centros = {}
-    for regiao, geoms in geoms_por_regiao.items():
-        geom = unary_union(geoms)
+    for regiao, geom in uniao.items():
         por_tipo = contagem[regiao]
         total = sum(por_tipo.values())
-        centros[regiao] = geom.representative_point()
-        propriedades = {
-            "regiao": regiao,
-            "total": total,
-            "detalhe": detalhe_percentual(por_tipo),
-        }
+        propriedades = {"regiao": regiao, "total": total, "detalhe": detalhe_quantidades(por_tipo)}
         t = 0.4 + 0.6 * total / maximo
         pesos = [(tipo, por_tipo[tipo]) for tipo in TIPOS if por_tipo[tipo]]
-        for tipo, parte in fatiar(geom, pesos):
+        for tipo, parte in fatiar(geom.buffer(-MARGEM_REGIOES, join_style=2), pesos):
             features.append({"type": "Feature",
                              "properties": {**propriedades, "cor": mistura(TIPOS[tipo][1], t)},
                              "geometry": mapping(parte)})
-    return features, centros
+    return features
 
 
-def legenda_html(totalPorTipo):
+def features_municipios(contagemMunicipio):
+    malha = json.loads(MALHA_MUNICIPIOS.read_text(encoding="utf-8"))["features"]
+    nomes = {}
+    with MUNICIPIOS.open(encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            nomes[r["codigo_ibge"]] = f"{r['nome']}/{CODIGO_UF[int(r['codigo_uf'])]}"
+    features = []
+    for feature in malha:
+        codigo = feature["properties"]["codarea"]
+        por_tipo = contagemMunicipio.get(codigo)
+        propriedades = {"nome": nomes.get(codigo, "")}
+        if por_tipo:
+            dominante = max((t for t in TIPOS if por_tipo[t]), key=lambda t: por_tipo[t])
+            propriedades["detalhe"] = detalhe_quantidades(por_tipo)
+            propriedades["cor"] = TIPOS[dominante][1]
+        else:
+            propriedades["detalhe"] = "Sem UC federal de proteção integral"
+            propriedades["cor"] = "#ffffff"
+        features.append({"type": "Feature", "properties": propriedades, "geometry": feature["geometry"]})
+    return features
+
+
+def features_contorno(uniao):
+    return [{"type": "Feature", "properties": {"regiao": regiao}, "geometry": mapping(geom)}
+            for regiao, geom in uniao.items()]
+
+
+def legenda_html(totalPorTipo, nota):
     linhas = []
     for chave, (nome, cor) in TIPOS.items():
         linhas.append(f"<div class='linha'><i style='background:{cor}'></i>{nome} "
                       f"({totalPorTipo[chave]} UCs)</div>")
-    linhas.append("<small>Cada região tem faixas verticais proporcionais à quantidade de UCs de cada tipo.<br>"
-                  "Quanto mais UCs na região, mais forte a cor.</small>")
+    linhas.append(f"<small>{nota}</small>")
     return f"<div class='legenda'><h4>Tipo de UC</h4>{''.join(linhas)}</div>"
 
 
-def gerar_mapa(features, centros, contagem, totalPorTipo):
+def montar_mapa(camadas, contagem, uniao, totalPorTipo, nota, titulo, arquivo):
     mapa = folium.Map(location=[-14.2, -51.9], zoom_start=4, tiles=None, zoom_snap=0,
                       zoom_control=False, attribution_control=False)
-    folium.GeoJson(
-        {"type": "FeatureCollection", "features": features},
-        style_function=lambda f: {"fillColor": f["properties"]["cor"], "color": "#999999",
-                                  "weight": 0.5, "fillOpacity": 1},
-        highlight_function=lambda f: {"color": "#222222", "weight": 2},
-        tooltip=folium.GeoJsonTooltip(fields=["regiao", "total", "detalhe"],
-                                      aliases=["Região:", "UCs:", "Por tipo:"]),
-    ).add_to(mapa)
-    for regiao, ponto in centros.items():
+    for camada in camadas:
+        camada.add_to(mapa)
+    for regiao, geom in uniao.items():
+        lado, lat = POSICAO_ROTULOS[regiao]
+        lon = LON_ESQUERDA if lado == "esquerda" else LON_DIREITA
+        ponto = geom.representative_point()
+        folium.PolyLine([[ponto.y, ponto.x], [lat - 2, lon]], color="#222222", weight=1, opacity=0.6).add_to(mapa)
+        classe = "rotulo esq" if lado == "esquerda" else "rotulo"
         folium.Marker(
-            location=[ponto.y, ponto.x],
-            icon=folium.DivIcon(html=f"<div class='rotulo'>{regiao}<br>{sum(contagem[regiao].values())} UCs"
-                                f"{rotulo_percentuais(contagem[regiao])}</div>"),
+            location=[lat, lon],
+            icon=folium.DivIcon(html=f"<div class='{classe}'>{regiao}<br>{sum(contagem[regiao].values())} UCs"
+                                f"{rotulo_quantidades(contagem[regiao])}</div>"),
         ).add_to(mapa)
 
     mapa_js = mapa.get_name()
     mapa.get_root().script.add_child(folium.Element(
         f"function ajustar() {{ const titulo = document.querySelector('.titulo'); "
         f"const legenda = document.querySelector('.legenda'); const mobile = window.innerWidth <= 768; "
-        f"{mapa_js}.invalidateSize(); {mapa_js}.fitBounds([[-33.8, -74.0], [5.3, -34.8]], {{"
+        f"{mapa_js}.invalidateSize(); {mapa_js}.fitBounds([[-35.5, -88.0], [6.5, -20.0]], {{"
         f"paddingTopLeft: [mobile ? 10 : 40, titulo.offsetHeight + 20], "
         f"paddingBottomRight: mobile ? [10, legenda.offsetHeight + 10] : [legenda.offsetWidth + 40, 40]}}); }}"
         "window.addEventListener('load', ajustar); window.addEventListener('resize', ajustar);"
@@ -205,13 +232,46 @@ def gerar_mapa(features, centros, contagem, totalPorTipo):
     mapa.get_root().header.add_child(folium.Element(CSS))
     mapa.get_root().html.add_child(folium.Element(
         "<div class='titulo'><b>Unidades de Conservação de proteção integral federais</b>"
-        "<span>UCs por região e tipo. Fonte: ICMBio, atributos oficiais (14/10/2022)</span></div>"
+        f"<span>{titulo}. Fonte: ICMBio, atributos oficiais (14/10/2022)</span></div>"
     ))
-    mapa.get_root().html.add_child(folium.Element(legenda_html(totalPorTipo)))
-
-    arquivo = PASTA_MAPAS / "mapa_ucs.html"
+    mapa.get_root().html.add_child(folium.Element(legenda_html(totalPorTipo, nota)))
     mapa.save(arquivo)
     return arquivo
+
+
+def gerar_mapa_regioes(contagem, uniao, totalPorTipo):
+    camadas = [folium.GeoJson(
+        {"type": "FeatureCollection", "features": features_regioes(uniao, contagem)},
+        style_function=lambda f: {"fillColor": f["properties"]["cor"], "color": "#999999",
+                                  "weight": 0.5, "fillOpacity": 1},
+        highlight_function=lambda f: {"color": "#222222", "weight": 2},
+        tooltip=folium.GeoJsonTooltip(fields=["regiao", "total", "detalhe"],
+                                      aliases=["Região:", "UCs:", "Por tipo:"]),
+    )]
+    nota = ("Cada região tem faixas verticais proporcionais à quantidade de UCs de cada tipo.<br>"
+            "Quanto mais UCs na região, mais forte a cor.")
+    return montar_mapa(camadas, contagem, uniao, totalPorTipo, nota, "UCs por região e tipo",
+                       PASTA_MAPAS / "mapa_ucs.html")
+
+
+def gerar_mapa_municipios(contagem, contagemMunicipio, uniao, totalPorTipo):
+    camadas = [
+        folium.GeoJson(
+            {"type": "FeatureCollection", "features": features_municipios(contagemMunicipio)},
+            style_function=lambda f: {"fillColor": f["properties"]["cor"], "color": "#d0d0d0",
+                                      "weight": 0.2, "fillOpacity": 1},
+            highlight_function=lambda f: {"color": "#222222", "weight": 1.5},
+            tooltip=folium.GeoJsonTooltip(fields=["nome", "detalhe"], aliases=["Município:", "UCs:"]),
+        ),
+        folium.GeoJson(
+            {"type": "FeatureCollection", "features": features_contorno(uniao)},
+            style_function=lambda f: {"fill": False, "color": "#222222", "weight": 2.5},
+        ),
+    ]
+    nota = ("Cada município tem a cor do tipo de UC mais frequente nele.<br>"
+            "As linhas escuras separam as regiões.")
+    return montar_mapa(camadas, contagem, uniao, totalPorTipo, nota, "UCs por município e tipo",
+                       PASTA_MAPAS / "mapa_ucs_municipios.html")
 
 
 def exportar_foto(html):
@@ -227,18 +287,20 @@ def exportar_foto(html):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Gera o mapa de UCs por região.")
-    parser.add_argument("--foto", action="store_true", help="também exporta o mapa como PNG")
+    parser = argparse.ArgumentParser(description="Gera os mapas de UCs por região e por município.")
+    parser.add_argument("--foto", action="store_true", help="também exporta os mapas como PNG")
     args = parser.parse_args()
 
-    contagem, totalPorTipo, faltando = carregar_dados()
+    contagem, contagemMunicipio, totalPorTipo, faltando = carregar_dados()
+    uniao = uniao_regioes()
     PASTA_MAPAS.mkdir(exist_ok=True)
 
-    features, centros = gerar_features(contagem)
-    html = gerar_mapa(features, centros, contagem, totalPorTipo)
-    print(f"{html.name}: " + ", ".join(f"{r} {sum(c.values())} UCs" for r, c in contagem.items()))
-    if args.foto:
-        print(f"  foto: {exportar_foto(html).name}")
+    htmls = [gerar_mapa_regioes(contagem, uniao, totalPorTipo),
+             gerar_mapa_municipios(contagem, contagemMunicipio, uniao, totalPorTipo)]
+    for html in htmls:
+        print(html.name)
+        if args.foto:
+            print(f"  foto: {exportar_foto(html).name}")
 
     if faltando:
         print(f"Não encontrados ({len(faltando)}):")
